@@ -1,0 +1,318 @@
+%% EDITED BY IKARO BERALDO
+%% Simplified ripple detection (for 1 channel)
+
+function detect_ripples_block_by_block_function(directory,names)
+
+mkdir(fullfile(directory,'ripple'))
+for ii = 1:length(names)
+
+    clearvars -except directory names counter ii s_p
+    counter = 1;
+
+    % Complete filename
+    filename1 = fullfile(directory,names{ii},'blocked_data.mat');
+    filename2 = fullfile(directory,names{ii},'GMM_Classification.mat');
+    load(filename1,'LFP3','LFP2','fs')
+    load(filename2)
+    %     LFP1 = gpuArray(LFP1);
+    %     LFP2 = gpuArray(LFP2);
+    %     LFP3 = gpuArray(LFP3);
+
+    GMM_NREM_All_Sort(:) = false;
+    GMM_NREM_All_Sort(GMM.All_Sort == 2) = true;
+    GMM_REM_All_Sort(:) = false;
+    GMM_REM_All_Sort(GMM.All_Sort == 1) = true;
+    GMM_WK_All_Sort(:) = false;
+    GMM_WK_All_Sort(GMM.All_Sort == 3) = true;
+
+    srate = fs;
+
+    % ####################### LPF3 ########################
+    % INPUT: eegUPSampled: matrix (1 x n collums)
+    % MAIN OUTPUT: ripple_result
+    aux_lfp = NaN(size(LFP3,1),size(LFP3,2));
+    %180Hz notchfilter
+    for ll = 1:size(aux_lfp,1)
+        aux_lfp(ll,:) = notchfilter(LFP3(ll,:),srate,180);
+    end
+
+    nREM = find(GMM.All_Sort == 2);
+    LFP3_aux = aux_lfp(nREM,:);
+    clear aux_lfp
+
+    [ripple_result_3,ripple_result_block_3,lowcutoff,highcutoff,thresholdf,thresh,min_sw_period,max_sw_period,min_isw_period,noRipple_2]...
+        = detect_ripple_loop(LFP3_aux,srate, nREM);
+    clear LFP3_aux
+
+    % ####################### LPF2 ########################
+    % INPUT: eegUPSampled: matrix (1 x n collums)
+    % MAIN OUTPUT: ripple_result
+    aux_lfp = NaN(size(LFP2,1),size(LFP2,2));
+    %180Hz notchfilter
+    for ll = 1:size(aux_lfp,1)
+        aux_lfp(ll,:) = notchfilter(LFP2(ll,:),srate,180);
+    end
+
+    nREM = find(GMM.All_Sort == 2);
+    LFP2_aux = aux_lfp(nREM,:);
+    clear aux_lfp
+
+    [ripple_result_2,ripple_result_block_2,lowcutoff,highcutoff,thresholdf,thresh,min_sw_period,max_sw_period,min_isw_period,noRipple_3]...
+        = detect_ripple_loop(LFP2_aux,srate, nREM);
+
+    %% Save
+
+    clc
+    display(['total number of candidate events for LFP2 are ' num2str(noRipple_2)])
+    display(['total number of candidate events for LFP3 are ' num2str(noRipple_3)])
+
+
+    sav = fullfile(directory,'ripple',names{ii});
+    save(sav,'ripple_result_2','ripple_result_block_2','ripple_result_3','ripple_result_block_3',...
+        ,'lowcutoff','highcutoff','thresholdf','thresh','min_sw_period','max_sw_period','min_isw_period')
+
+    ff = plot_ripple_average(LFP2,ripple_result_block_2,srate,noRipple_2);
+    % Save PDF
+    %sgtitle(sprintf('Ripple Signal Average - %s',names{ii}))
+    print('-fillpage',fullfile(directory,'ripple',sprintf('ripple_average_2 - %s',names{ii})),'-dpdf','-r0',ff)
+    close(ff)
+
+    ff = plot_ripple_average(LFP3,ripple_result_block_3,srate,noRipple_3);
+    % Save PDF
+    %sgtitle(sprintf('Ripple Signal Average - %s',names{ii}))
+    print('-fillpage',fullfile(directory,'ripple',sprintf('ripple_average_3 - %s',names{ii})),'-dpdf','-r0',ff)
+    close(ff)
+
+
+end
+end
+
+% ######################################################################################################
+% ################################## RIPPLE DETECTION LOOP ITSELF ######################################
+% ######################################################################################################
+
+function [ripple_result,ripple_result_block,lowcutoff,highcutoff,thresholdf,thresh,min_sw_period,max_sw_period,min_isw_period, noRipple]...
+    = detect_ripple_loop(LFP2_aux,srate, nREM)
+
+% Final detected events
+ripple_result_block = [];
+
+for bb = 1:size(LFP2_aux,1)
+
+    HIPO = LFP2_aux(bb,:);
+
+    samplingRate = srate;
+
+    %% Original
+    thresh = 3;
+
+    thresholdf = 1  ; % power SD threshold for ripple detection
+
+    min_sw_period = 50 ; % minimum ripple period, 50ms ~ 5-10 cycles\
+    max_sw_period = 450;
+    % min_isw_period = 100; % minimum inter-ripple period
+    min_isw_period = 50; % minimum inter-ripple period
+
+
+    %% Ikaro
+    %     thresh = 4;  %1
+    %
+    %     highband = 250; %300 % bandpass filter range
+    %     lowband = 100; % (250Hz to 100Hz)
+    %
+    %     thresholdf = 4;  %1 ; % power SD threshold for ripple detection
+    %
+    %     min_sw_period = 35; %45; % minimum ripple period, 50ms ~ 5-10 cycles\
+    %     max_sw_period = 200; %300
+    %     % min_isw_period = 100; % minimum inter-ripple period
+    %     min_isw_period = 50; % minimum inter-ripple period
+
+    %%
+
+    forder = 100;  % filter order has to be even. The longer the more selective, but the operation
+    % will be linearly slower to the filter order. 100-125 for 1.25Hz (500 for 5 KH
+    avgfilorder = round(min_sw_period/1000*samplingRate/2)*2+1 ; % should not change this. length of averaging filter
+    % avgfilorder = 101; % should not change this. length of averaging filter
+    forder = ceil(forder/2)*2; % to make sure filter order is even
+
+
+    % firfiltb = fir1(forder,[lowband/samplingRate*2,highband/samplingRate*2]); % calculate convolution func
+    avgfiltb = ones(avgfilorder,1)/avgfilorder; % passbands are normalized to Nyquist frequency.
+    %
+    %
+    % filtered_data = Filter0(firfiltb,HIPO); % the actual filtering
+
+    %             lowcutoff=130;
+    %             highcutoff=230;
+
+    lowcutoff = 140;
+    highcutoff = 220;
+
+    [filtered_data]=eegfilt2(HIPO,samplingRate,lowcutoff,[]);
+    [filtered_data]=eegfilt2(filtered_data,samplingRate,[],highcutoff);
+
+    exclude = [];
+    filtered_data2 = filtered_data.^2; % to power trace
+    sdat = unity(Filter0(avgfiltb,filtered_data2),exclude); % averaging & standardizing
+
+
+    % (1) primary detection of ripple periods, based on thresholding
+    thresholded = sdat > thresholdf;
+    primary_detection_b = find(diff(thresholded)>0);
+    primary_detection_e = find(diff(thresholded)<0);
+
+    %Only if there is a detected event
+    if ~isempty(primary_detection_b) && ~isempty(primary_detection_e)
+
+        if primary_detection_b(1)>primary_detection_e(1)
+            primary_detection_e = primary_detection_e(2:end);
+        end
+
+        sum_detection =[primary_detection_b(1:size(primary_detection_e,1),1) primary_detection_e];
+        % sum_detection_e = [sum_detection_e primary_detection_e];
+
+        sum_detection = sortrows(sum_detection);
+        primary_detection_b = sum_detection(:,1);
+        primary_detection_e = sum_detection(:,2);
+
+        if (length(primary_detection_e) == length(primary_detection_b)-1) % exclude ranged-out (1st or
+            primary_detection_b = primary_detection_b(1:end-1);
+        end
+
+        if (length(primary_detection_e)-1 == length(primary_detection_b))
+            primary_detection_e = primary_detection_e(2:end);
+        end
+
+        primary = [primary_detection_b,primary_detection_e]; % [start, end]
+
+
+
+        % (2) merging ripples, if inter-ripples period is less than min_isw_period;
+        min_isw_period = min_isw_period/1000*samplingRate; % in eeg
+        min_sw_period = min_sw_period/1000*samplingRate; % in eeg
+        max_sw_period = max_sw_period/1000*samplingRate;
+        secondary=[];
+        tmp_rip = primary(1,:);
+
+        for xx=2:size(primary,1)
+            if (primary(xx,1)-tmp_rip(2)) < min_isw_period
+                tmp_rip = [tmp_rip(1),primary(xx,2)]; % merge two ripples
+            elseif abs(primary(xx,1)-tmp_rip(1)) < min_isw_period
+                tmp_rip = [min([tmp_rip(1) primary(xx,1)]),max([tmp_rip(2) primary(xx,2)])]; % merge two ripples
+            else
+                secondary = [secondary;tmp_rip];
+                tmp_rip = primary(xx,:);
+            end
+        end
+
+        secondary = [secondary;tmp_rip]; % [start, end]
+
+        keeper = find((secondary(:,2)-secondary(:,1)) > min_sw_period & (secondary(:,2)-secondary(:,1)) < max_sw_period);
+        secondary = secondary(keeper,:);
+
+
+
+        % (3) ripples must have its peak power of > max_thresholdf
+        third = [];
+        SDmax = [];
+
+        for xx=1:size(secondary,1)
+            [max_val,max_idx] = max(sdat([secondary(xx,1):secondary(xx,2)]));
+            %     mean_val = mean(sdat([secondary(xx,1):secondary(xx,2)]));
+            if max_val > thresh && max_val < 10 % & mean_val>thresholdf
+                third = [third;secondary(xx,:)]; % [start, end]
+                SDmax = [SDmax;max_val];
+            end
+        end
+
+
+        % (4) detection of negative peak position of each ripple
+        peak_idx = zeros(size(third,1),1);
+
+        for xx=1:size(third,1)
+            [min_val,min_idx] = min(filtered_data(third(xx,1):third(xx,2)));
+            peak_idx(xx,1) = min_idx+third(xx,1)-1;
+        end
+
+        %If there is no ripple ignore the next steps
+        if isempty(third) == 0
+            Fourth = [third(:,1),peak_idx,third(:,2),SDmax]; % [start, peak, end, SD]
+
+
+            % (7) MAIN OUTPUT
+            ripple_result = Fourth; % [start, peak, end, SD] (in eeg)
+
+            %%% visual inspection of the raw and filtered data
+
+
+            %Getting the blocks
+            for rr = 1:size(ripple_result,1)
+                ripple_result_block = [ripple_result_block; nREM(bb) ripple_result(rr,:)];
+            end
+
+        end
+    end
+
+end
+
+noRipple = size(ripple_result_block, 1);
+end
+
+
+% ##################################################################################
+% ########################### PLOT RIPPLES FUNCTION ################################
+% ##################################################################################
+function ff = plot_ripple_average(LFP3,ripple_result_block,srate,noRipple)    %% Plot ripples
+
+ff = figure;
+b_length = size(LFP3,2)/srate;
+LFP3_filt = eegfilt2(LFP3,srate,140,[]);
+LFP3_filt = eegfilt2(LFP3_filt,srate,[],220);
+
+ripple_result = [ripple_result_block(:,2:4) + (ripple_result_block(:,1)-1)*b_length*srate ripple_result_block(:,5)];
+LFP3 = reshape(LFP3',[1 numel(LFP3)]);
+
+LFP3_filt = reshape(LFP3_filt',[1 numel(LFP3_filt)]);
+
+%In miliseconds
+distance = 150/1000;
+total_ripple_lfp = NaN(size(ripple_result_block,1),srate*2*distance+1);
+total_ripple_lfp_filt = NaN(size(ripple_result_block,1),srate*2*distance+1);
+
+
+for rr = 1:size(ripple_result,1)
+    data = ripple_result(rr,2) - distance*srate : ripple_result(rr,2) + distance*srate;
+    if sum(data < 0) > 0
+        continue
+    else
+        total_ripple_lfp(rr,:) = LFP3(data);
+        total_ripple_lfp_filt(rr,:) = LFP3_filt(data);
+    end
+end
+
+t = linspace(-distance,distance,size(total_ripple_lfp,2));
+plot(t,nanmean(total_ripple_lfp))
+hold on
+plot(t,nanmean(total_ripple_lfp_filt))
+xlim([t(1) t(end)])
+ylim([-200 100])
+
+ylabel('Average Amplitude (mV)')
+xlabel('Seconds')
+title(['# Ripples: ', num2str(noRipple)])
+
+%Plot patterns
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gca,'fontname','helvetica')
+
+ax.XColor = 'k'; % Red
+ax.YColor = 'k'; % Blue
+set(gcf,'color','white')
+box off
+
+legend('Raw Data','Filtered (140-220Hz) Data','Location','southeast')
+legend boxoff
+set(gca,'fontsize',16)
+
+end

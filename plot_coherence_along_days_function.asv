@@ -1,0 +1,223 @@
+%% Plot PSD for each DAY
+function plot_coherence_along_days_function(directory,names,channel_selection)
+
+% Pre-allocate
+% phase.nrem = nan(103,size(names,1),size(names,2));
+% phase.rem = nan(103,size(names,1),size(names,2));
+% phase.wk = nan(103,size(names,1),size(names,2));
+%
+% spectral.nrem = nan(2049,size(names,1),size(names,2));
+% spectral.rem = nan(2049,size(names,1),size(names,2));
+% spectral.wk = nan(2049,size(names,1),size(names,2));
+
+counter_loop = 0;
+
+for ii = 1:size(names,1)
+    for jj = 1:size(names,2)
+
+        channel = channel_selection(ii);
+
+        % Load file
+        open_phase = fullfile(directory,sprintf('phase_coherence1%d', channel),char(names{ii,jj}));
+        load(open_phase,sprintf('Call1%d', channel),'f')
+        eval(sprintf('Call = Call1%d;', channel))
+
+        open_phase = fullfile(directory,sprintf('spectral_coherence1%d', channel),char(names{ii,jj}));
+        load(open_phase,sprintf('Cxy_all1%d', channel),'F')
+        eval(sprintf('Cxy_all = Cxy_all1%d;', channel))
+
+        open_class = fullfile(directory,char(names{ii,jj}),'GMM_Classification.mat');
+        load(open_class,'GMM','GMM_NREM_All_Sort','GMM_REM_All_Sort','GMM_WK_All_Sort')
+
+        % Fix the classification
+        GMM_NREM_All_Sort(:) = false;
+        GMM_NREM_All_Sort(GMM.All_Sort == 2) = true;
+        GMM_REM_All_Sort(:) = false;
+        GMM_REM_All_Sort(GMM.All_Sort == 1) = true;
+        GMM_WK_All_Sort(:) = false;
+        GMM_WK_All_Sort(GMM.All_Sort == 3) = true;
+
+        theta_f.spec = find(F >= 5 & F <= 9);
+        theta_f.phase = find(f >= 5 & f <= 9);
+        delta_f.spec = find(F >= 1 & F <= 4);
+        delta_f.phase = find(f >= 1 & f <= 4);
+        gamma_f.spec = find((F >= 30 & F <= 55) | (F >= 65 & F <= 90));
+        gamma_f.phase = find((f >= 30 & f <= 55) | (f >= 65 & f <= 90));
+
+
+        phase = struct();
+        spectral = struct();
+
+
+        % Extract the averages
+        %         phase.nrem(:,ii,jj) = nanmean(Call(:,GMM_NREM_All_Sort==1),2);
+        %         phase.rem(:,ii,jj) = nanmean(Call(:,GMM_REM_All_Sort==1),2);
+        %         phase.wk(:,ii,jj) = nanmean(Call(:,GMM_WK_All_Sort==1),2);
+        %
+        %         spectral.nrem(:,ii,jj) = nanmean(Cxy_all(:,GMM_NREM_All_Sort==1),2);
+        %         spectral.rem(:,ii,jj) = nanmean(Cxy_all(:,GMM_REM_All_Sort==1),2);
+        %         spectral.wk(:,ii,jj) = nanmean(Cxy_all(:,GMM_WK_All_Sort==1),2);
+
+        % Phase
+
+        phase.nrem.delta = Call(delta_f.phase,GMM_NREM_All_Sort==1);
+        phase.nrem.theta = Call(theta_f.phase,GMM_NREM_All_Sort==1);
+        phase.nrem.gamma = Call(gamma_f.phase,GMM_NREM_All_Sort==1);
+
+        phase.rem.delta = Call(delta_f.phase,GMM_REM_All_Sort==1);
+        phase.rem.theta = Call(theta_f.phase,GMM_REM_All_Sort==1);
+        phase.rem.gamma = Call(gamma_f.phase,GMM_REM_All_Sort==1);
+
+        phase.wk.delta = Call(delta_f.phase,GMM_WK_All_Sort==1);
+        phase.wk.theta = Call(theta_f.phase,GMM_WK_All_Sort==1);
+        phase.wk.gamma = Call(gamma_f.phase,GMM_WK_All_Sort==1);
+
+        % Spectral
+
+        spectral.nrem.delta = Cxy_all(delta_f.spec,GMM_NREM_All_Sort==1);
+        spectral.nrem.theta = Cxy_all(theta_f.spec,GMM_NREM_All_Sort==1);
+        spectral.nrem.gamma = Cxy_all(gamma_f.spec,GMM_NREM_All_Sort==1);
+
+        spectral.rem.delta = Cxy_all(delta_f.spec,GMM_REM_All_Sort==1);
+        spectral.rem.theta = Cxy_all(theta_f.spec,GMM_REM_All_Sort==1);
+        spectral.rem.gamma = Cxy_all(gamma_f.spec,GMM_REM_All_Sort==1);
+
+        spectral.wk.delta = Cxy_all(delta_f.spec,GMM_WK_All_Sort==1);
+        spectral.wk.theta = Cxy_all(theta_f.spec,GMM_WK_All_Sort==1);
+        spectral.wk.gamma = Cxy_all(gamma_f.spec,GMM_WK_All_Sort==1);
+
+        clear Cxy_all Call
+
+        % Plot
+        fig_handle = plot_coherence(phase,spectral,GMM);
+
+        % save
+        sgtitle(sprintf('Phase and Spectral Coherence Along Days - %s',names{ii,jj}))
+        print('-bestfit',fullfile(directory,sprintf('Phase and Spectral Coherence Along the Day - %s',names{ii,jj})),'-dpdf','-vector','-r0',fig_handle)
+
+        close f
+    end
+end
+end
+%% Plot
+
+% Plot function
+function f = plot_coherence(phase,spectral,GMM)
+
+f = figure;
+
+REM = find(GMM.All_Sort==1);
+NREM = find(GMM.All_Sort==2);
+WK = find(GMM.All_Sort==3);
+
+color(3,:)=[0.9290, 0.6940, 0.1250];    % WK
+color(1,:) =[0 0.4470 0.7410];          % NREM
+color(2,:) =[0.3 0.3 0.3];              % REM
+
+% Phase Delta
+subplot(6,1,1)
+hold on
+plot(NREM,phase.nrem.delta,'.','Color',color(1,:))
+plot(REM,phase.rem.delta,'.','Color',color(2,:))
+plot(WK,phase.wk.delta,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('Phase Coherence - Delta')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+% Phase Theta
+subplot(6,1,2)
+hold on
+plot(NREM,phase.nrem.theta,'.','Color',color(1,:))
+plot(REM,phase.rem.theta,'.','Color',color(2,:))
+plot(WK,phase.wk.theta,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('Phase Coherence - Theta')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+
+% Phase Gamma
+subplot(6,1,3)
+hold on
+plot(NREM,phase.nrem.gamma,'.','Color',color(1,:))
+plot(REM,phase.rem.gamma,'.','Color',color(2,:))
+plot(WK,phase.wk.gamma,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('Phase Coherence - Gamma')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+
+% Spectral Delta
+subplot(6,1,4)
+hold on
+plot(NREM,spectral.nrem.delta,'.','Color',color(1,:))
+plot(REM,spectral.rem.delta,'.','Color',color(2,:))
+plot(WK,spectral.wk.delta,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('spectral Coherence - Delta')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+% spectral Theta
+subplot(6,1,5)
+hold on
+plot(NREM,spectral.nrem.theta,'.','Color',color(1,:))
+plot(REM,spectral.rem.theta,'.','Color',color(2,:))
+plot(WK,spectral.wk.theta,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('spectral Coherence - Theta')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+
+% spectral Gamma
+subplot(6,1,6)
+hold on
+plot(NREM,spectral.nrem.gamma,'.','Color',color(1,:))
+plot(REM,spectral.rem.gamma,'.','Color',color(2,:))
+plot(WK,spectral.wk.gamma,'.','Color',color(3,:))
+ylim([0 1])
+xlim([0 max([NREM; REM; WK])])
+title('spectral Coherence - Gamma')
+ylabel('Coherence')
+legend('NREM','REM','WK')
+
+set(gca,'fontsize',18)
+set(gca,'Tickdir','out')
+set(gca,'Linewidth',1.5)
+set(gcf,'color',[1 1 1]);
+
+
+end

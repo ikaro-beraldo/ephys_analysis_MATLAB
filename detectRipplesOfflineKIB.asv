@@ -1,0 +1,183 @@
+function [result] = detectRipplesOfflineKIB(data, samplingRate, plotToMe, notchFilterFreqs)
+% Kamran Diba's offline ripple detection algorithm (1 hippocampus channel)
+% First edited by Ikaro Beraldo and then edited by Bruno Sousa
+%
+% [result] = detectRipplesOfflineKIB(data, samplingRate)
+%
+% Inputs
+%      - data: data matrix with R rows (each row represents an animal) and P
+%    columns (P recording data points)
+%      - samplingRate: sampling rate in Hz
+%      - plotToMe: boolean to turn on/off plots on the run
+%      - (optional) notchFilterFreqs: array with notch filter frequencies
+%
+% Output
+%      - result: Nx4 matrix where N is the number of ripple events detected. The
+%    columns are, in order: StartIndex, PeakIndex, EndIndex, SDMax.
+%    StartIndex and EndIndex are markers for the duration of the ripple
+%    event. PeakIndex is the position of the most negative point of data
+%    filtered in the ripple band. SDMax is the number of standard
+%    deviations that the normalized ripple power peak represents (putting
+%    it simple: the peak of normalized ripple power).
+%
+%      Example:
+%
+%               StartIndex  PeakIndex  EndIndex  SDMax
+%      result = 162889      162921     162976    4.28
+%               165889      165921     165976    3.51
+%               ...         ...        ...       ...
+    
+    % Verify number of aguments
+    if(nargin == 3) notchFilterFreqs = []; elseif() end;
+    nAnimals = size(data,1);
+    result = cell(nAnimals,1);
+
+    %% Loop for each animal
+    for r = 1:nAnimals
+        
+        clearvars -except result r rat data samplingRate...
+                          notchFilterFreqs nAnimals plotToMe
+        % Notch filter
+        if(~isempty(notchFilterFreqs))
+            for f=1:length(notchFilterFreqs)
+                data(r,:) = notchfilter(data(r,:), samplingRate, notchFilterFreqs(f));
+            end
+        end
+        
+        % Variables
+        % -----------------------------
+        thresholdf = 2  ; % Power sd threshold for ripple detection (first stage)
+        minThresh3rdStep = 3; % Minimum number of sds to consider a ripple (third stage) 
+        maxThresh3rdStep = 250; % Maximum number of sds to consider a ripple (third stage) 
+        rippleLowCutoff = 100; % [Hz] Ripple starting frequency
+        rippleHighCutoff = 250; % [Hz] Ripple ending frequency
+
+        min_sw_period = 50 ; % [ms] Minimum ripple duration
+        max_sw_period = 450; % [ms] Maximum ripple duration
+        min_isw_period = 50; % [ms] Minimum inter-ripple period ("ripple merging", first stage)
+        % -----------------------------
+      
+        avgfilorder = round(min_sw_period/1000*samplingRate/2)*2+1 ; % should not change this. length of averaging filter
+        avgfiltb = ones(avgfilorder,1)/avgfilorder; % passbands are normalized to Nyquist frequency.
+
+        % Filter the data in the ripple band
+        [filtered_data]=eegfilt2(data(r,:),samplingRate,rippleLowCutoff,[]); % Highpass
+        [filtered_data]=eegfilt2(filtered_data,samplingRate,[],rippleHighCutoff); % Lowpass
+        
+        % Calculate the power and normalize data
+        exclude = [];
+        filtered_data2 = filtered_data.^2; % To power trace
+        sdat = unity(Filter0(avgfiltb,filtered_data2),exclude); % Averaging and standardizing
+
+        % The algorithm is divided into 3 main processing steps and a 4th
+        % one, just to calculate the negative ripple peak. The steps are performed and
+        % detailed in the next lines:
+        
+        %----- (1) Primary detection of ripple periods based on thresholding
+        % The variable "primary" has the begin and the end indices where power is above thresholdf
+        thresholded = sdat > thresholdf;
+        primary_detection_b = find(diff(thresholded)>0); % Start of ripple period
+        primary_detection_e = find(diff(thresholded)<0); % End of ripple period
+        
+        % Little adjusments to guarantee order and appropriate range
+        if primary_detection_b(1)>primary_detection_e(1)
+            primary_detection_e = primary_detection_e(2:end);
+        end
+        sum_detection =[primary_detection_b(1:size(primary_detection_e,1),1) primary_detection_e];
+        sum_detection = sortrows(sum_detection);
+        primary_detection_b = sum_detection(:,1);
+        primary_detection_e = sum_detection(:,2);
+
+        if (length(primary_detection_e) == length(primary_detection_b)-1) % exclude ranged-out
+            primary_detection_b = primary_detection_b(1:end-1);
+        end
+
+        if (length(primary_detection_e)-1 == length(primary_detection_b))
+            primary_detection_e = primary_detection_e(2:end);
+        end
+
+        primary = [primary_detection_b,primary_detection_e]; % [start, end]
+
+        
+        %----- (2) Merging ripples, if inter-ripples period is less than min_isw_period;
+        % If periods of power above threshold are close enough, they are
+        % merged into one big ripple. Also, ripple periods with duration
+        % out of the min_sw_period and max_sw_period range are discarted
+        min_isw_period = min_isw_period/1000*samplingRate; % in eeg
+        min_sw_period = min_sw_period/1000*samplingRate; % in eeg
+        max_sw_period = max_sw_period/1000*samplingRate;
+        secondary=[];
+        tmp_rip = primary(1,:);
+
+        for ii=2:size(primary,1)
+            if (primary(ii,1)-tmp_rip(2)) < min_isw_period
+                tmp_rip = [tmp_rip(1),primary(ii,2)]; % merge two ripples
+            elseif abs(primary(ii,1)-tmp_rip(1)) < min_isw_period
+                tmp_rip = [min([tmp_rip(1) primary(ii,1)]),max([tmp_rip(2) primary(ii,2)])]; % merge two ripples
+            else
+                secondary = [secondary;tmp_rip];
+                tmp_rip = primary(ii,:);
+            end
+        end
+
+        secondary = [secondary;tmp_rip]; % [start, end]
+        
+        % Only resulting ripples with duration between min_sw_period and
+        % max_sw_period are kept
+        keeper = find((secondary(:,2)-secondary(:,1)) > min_sw_period & (secondary(:,2)-secondary(:,1)) < max_sw_period);
+        secondary = secondary(keeper,:);
+
+
+        %----- (3) Ripples must have its peak power of > minThresh3rdStep and < maxThresh3rdStep
+        third = [];
+        SDmax = [];
+
+        for ii=1:size(secondary,1)
+            [max_val,max_idx] = max(sdat([secondary(ii,1):secondary(ii,2)]));
+            if max_val > minThresh3rdStep && max_val < maxThresh3rdStep
+                third = [third;secondary(ii,:)]; % [start, end]
+                SDmax = [SDmax;max_val];
+            end
+        end
+
+
+        %----- (4) Detection of negative peak position of each ripple
+        peak_idx = zeros(size(third,1),1);
+
+        for ii=1:size(third,1)
+            [min_val,min_idx] = min(filtered_data(third(ii,1):third(ii,2)));
+            peak_idx(ii,1) = min_idx+third(ii,1)-1;
+        end
+        
+        if(isempty(third))
+            fourth = [];
+            return;
+        else
+            fourth = [third(:,1),peak_idx,third(:,2),SDmax]; % [start, peak, end, SD]
+        end
+
+        %-----MAIN OUTPUT
+        result{r} = fourth; % [start, peak, end, SD] (in eeg)
+        
+        % Plots
+        if(plotToMe)
+           figure();
+           s(1) = subplot(311);
+           ts = 0:1/samplingRate:(size(data,2)-1)/samplingRate;
+           plot(ts, data(r,:)); ylabel('LFP'); legend('Raw Data');
+           
+           s(2) = subplot(312);
+           plot(ts, filtered_data); ylabel('LFP'); legend('Filtered Data (100-250Hz)');
+           
+           s(3) = subplot(313);
+           plot(ts, sdat); ylabel('LFP'); legend('Filt. Data Norm. Power'); hold on;
+           plot(ts, thresholdf*ones(size(ts)),'--g');
+           plot(ts, minThresh3rdStep*ones(size(ts)),'--r');
+           plot(ts, maxThresh3rdStep*ones(size(ts)),'--r');
+           
+           linkaxes(s, 'x');
+        end
+
+    end %n = 1:nAnimals
+
+end

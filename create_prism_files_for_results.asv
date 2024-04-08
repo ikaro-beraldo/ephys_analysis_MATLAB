@@ -1,0 +1,21 @@
+function create_prism_files_for_results(results_names, normalized_results, dir_to_save)
+
+% Get prism file model
+model_filename = "E:\Barnes Maze - Mestrad\dados matlab\PrismResults\ModelFile.pzfx";
+
+% Lop for each result
+for r = 1:length(results_names)
+    printf('%d')
+    % Define the command
+    command = sprintf("new_matrix = normalized_%s';",results_names{r});
+    % Execute the command
+    eval(command)
+    % Get the result name (also change the dots (.) to underscore (_)
+    result_name = strrep(results_names{r},'.','_');
+    % Define a final filename
+    final_file = fullfile(dir_to_save, result_name);
+
+    % Finally, create the pzfx (prism file)
+    create_new_pzfx_file(model_filename,new_matrix,result_name,final_file)
+end
+end
