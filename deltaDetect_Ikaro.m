@@ -13,6 +13,10 @@ count2 = 1;
 count3 = 1;
 step = 1/fs;
 
+if isempty(sd_threshold) % Check whether the threshold have been defined
+    sd_threshold = 2.8;
+end
+
 delta = filtered_LFP1;
 % delta        = nan(size(data_windowing.data_w,1),size(data_windowing.data_w,2)); % Delta wave detected
 delta_zscore = nan(size(data_windowing.data_w,1),size(data_windowing.data_w,2)); % z-score of delta
